@@ -1,13 +1,15 @@
-ALTER PROCEDURE RunQuotesMultiTrailingBarType @TrendPercentage decimal(18,2) = 0.6,
+ALTER PROCEDURE RunQuotesMultiTrailingBarType_Test @TrendPercentage decimal(18,2) = 0.6,
 													@RiskPercentage decimal(18,2) = 0.5,
 													@GainsPercentage decimal(18,2) = 0.5,
 													@IsHighLowInclude BIT = 1,
 													@IsTrailingLosses BIT = 1,
 													@IsTrailingGains BIT = 1,
 													@BarType varchar(10) = '2min',
-													@Debug BIT = 1
+													@Debug BIT = 1,
+													@DebugSwing INT = 1,
+													@Aggressive BIT = 1
 			 AS
-BEGIN
+BEGIN	
 
 
 	if object_id('tempdb..#Trend') is not null
@@ -67,6 +69,11 @@ BEGIN
 		and q.BarType = p.BarType
 	where q.BarType = @BarType
 
+if (@Debug = 1)
+	select *
+	from #SinceSwing
+	where Swing = @DebugSwing
+
 
 	if object_id('tempdb..#Entries') is not null
 		drop table #Entries
@@ -98,6 +105,15 @@ BEGIN
 	group by t1.Date, t1.Time, e.Swing, t1.Pattern, Sequence, Direction, Percentage
 	order by t1.Date, t1.Time, e.Swing, Pattern, Sequence
 
+	
+	if (@Debug = 1)
+		select *
+		from #Results
+		where Swing = @DebugSwing
+
+
+
+
 
 	if object_id('tempdb..#Shift') is not null
 		drop table #Shift
@@ -110,29 +126,62 @@ BEGIN
 
 							case when r2.[Close] > r2.[Open]  then 
 								r2.[Close] - (r2.[Close] / 100.0 * @RiskPercentage) 
-							else r2.[Open] - (r2.[Open] / 100.0 * @RiskPercentage) end
-
+							else 
+								case when @Aggressive = 0 then
+									case when (r2.[Open] - (r2.[Open] / 100.0 * @RiskPercentage)) > (r2.[Entry] - (r2.[Entry] / 100.0 * @RiskPercentage)) then (r2.[Open] - (r2.[Open] / 100.0 * @RiskPercentage))
+										else (r2.[Entry] - (r2.[Entry] / 100.0 * @RiskPercentage)) 
+									end 
+								else
+									r2.[Open] - (r2.[Open] / 100.0 * @RiskPercentage)
+								end
+							end
 						else r2.[Entry] - (r2.[Entry] / 100.0 * @RiskPercentage) end
 
 					else 
 						case when @IsTrailingLosses = 1 then  
 							case when r2.[Close] < r2.[Open] then 
 								r2.[Close] + (r2.[Close] / 100.0 * @RiskPercentage) 
-							else r2.[Open] + (r2.[Open] / 100.0 * @RiskPercentage)  end 
+							else 
+								case when @Aggressive = 0 then
+									case when (r2.[Open] + (r2.[Open] / 100.0 * @RiskPercentage)) > (r2.[Entry] + (r2.[Entry] / 100.0 * @RiskPercentage)) then (r2.[Open] + (r2.[Open] / 100.0 * @RiskPercentage))
+										else (r2.[Entry] + (r2.[Entry] / 100.0 * @RiskPercentage)) 
+									end 	
+								else
+									r2.[Open] + (r2.[Open] / 100.0 * @RiskPercentage)
+								end																							
+							end	
 						else r2.[Entry] + (r2.[Entry] / 100.0 * @RiskPercentage) end end as CutLossesLevel,
 
 					case when r1.Direction = 'Up' then
 						case when @IsTrailingGains = 1 then 
 							case when r2.[Close] > r2.[Open]  then 
 								r2.[Close] + (r2.[Close] / 100.0 * @GainsPercentage) 
-							else r2.[Open] + (r2.[Open] / 100.0 * @GainsPercentage) end
+							else 
+								case when @Aggressive = 0 then
+									case when (r2.[Open] + (r2.[Open] / 100.0 * @GainsPercentage)) > (r2.[Entry] + (r2.[Entry] / 100.0 * @RiskPercentage)) then (r2.[Open] + (r2.[Open] / 100.0 * @GainsPercentage))
+										else (r2.[Open] + (r2.[Open] / 100.0 * @GainsPercentage)) 
+									end 
+								else
+									r2.[Open] + (r2.[Open] / 100.0 * @GainsPercentage)
+								end
+								
+							end
 						else r2.[Entry] + (r2.[Entry] / 100.0 * @GainsPercentage) end
 
 					else 
 						case when @IsTrailingGains = 1 then  
 							case when r2.[Close] < r2.[Open] then 
 								r2.[Close] - (r2.[Close] / 100.0 * @GainsPercentage) 
-							else r2.[Open] - (r2.[Open] / 100.0 * @GainsPercentage)  end 
+							else 
+								case when @Aggressive = 0 then
+									case when (r2.[Open] - (r2.[Open] / 100.0 * @GainsPercentage)) > (r2.[Entry] - (r2.[Entry] / 100.0 * @RiskPercentage)) then (r2.[Open] - (r2.[Open] / 100.0 * @GainsPercentage))
+										else (r2.[Open] - (r2.[Open] / 100.0 * @GainsPercentage)) 
+									end 
+								else
+									r2.[Open] - (r2.[Open] / 100.0 * @GainsPercentage)
+								end
+								
+							end 
 						else r2.[Entry] - (r2.[Entry] / 100.0 * @GainsPercentage) end end as CollectGainsLevel,
 				convert(decimal(18,2), NULL) as CutLosses,
 				convert(decimal(18,2), NULL) as CollectGains
@@ -156,6 +205,13 @@ BEGIN
 					else case when [Close] <= CollectGainsLevel then [Close] else NULL end end
 			
 
+	
+	
+	if (@Debug = 1)
+		select *
+		from #Shift
+		where Swing = @DebugSwing
+
 	--------------------------------------
 	-- Take first Loss or Gain
 	--------------------------------------
@@ -167,6 +223,7 @@ BEGIN
 	from #Shift
 	where [CutLosses] is not null
 		or [CollectGains] is not null
+	
 
 	insert into #RealizedResults
 	select r.*, ROW_NUMBER() OVER(PARTITION BY r.Date, r.Swing, r.Pattern ORDER BY r.Date, r.Swing, r.Pattern, r.Time) as RealizedSequence
@@ -177,8 +234,15 @@ BEGIN
 	where rr.Date is null
 		and r.Time = (select max(Time) from #Results a where Date = r.Date and Swing = r.Swing and Pattern = r.Pattern)
 
+
 	delete from #RealizedResults
 	where RealizedSequence <> 1
+
+	if @Debug = 1
+		select *
+		from #RealizedResults
+		where Swing = @DebugSwing
+
 
 	select Date, 
 		count(distinct Swing) as Swings,
@@ -193,33 +257,5 @@ BEGIN
 			sum(isnull(ExposurePercentage, 0)) as OverallTotal
 	from #RealizedResults
 
-
 END
 GO
-
-exec RunQuotesMultiTrailingBarType @TrendPercentage = 0.6,
-													@RiskPercentage = 0.5,
-													@GainsPercentage = 0.5,
-													@IsHighLowInclude = 1,
-													@IsTrailingLosses = 1,
-													@IsTrailingGains = 1,
-													@BarType = '2min',
-													@Debug = 0
-
-exec RunQuotesMultiTrailingBarType @TrendPercentage = 1.15,
-													@RiskPercentage = 1.15,
-													@GainsPercentage = 1.15,
-													@IsHighLowInclude = 0,
-													@IsTrailingLosses = 0,
-													@IsTrailingGains = 0,
-													@BarType = '5min',
-													@Debug = 0
-
-exec RunQuotesMultiTrailingBarType @TrendPercentage = 1.3,
-													@RiskPercentage = 1.3,
-													@GainsPercentage = 1.3,
-													@IsHighLowInclude = 0,
-													@IsTrailingLosses = 0,
-													@IsTrailingGains = 0,
-													@BarType = '10min',
-													@Debug = 0
